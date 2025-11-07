@@ -20,10 +20,11 @@ const int buzzerPin = 2;
 bool alarmaActivada = false;
 
 // --- INTERRUPTOR PRINCIPAL ---
-const int interruptorPin = 9;   // ON/OFF
+const int interruptorPin = 10;   // ON/OFF físico
 bool apagado = false;
 bool lastInterruptorState = HIGH;
 unsigned long lastDebounce = 0;
+unsigned long debounceDelay = 200;
 
 // --- HORARIOS DEL TIMBRE ---
 struct HorarioTimbre {
@@ -78,17 +79,6 @@ bool obtenerHora(struct tm &timeinfo) {
   }
 }
 
-void mostrarWiFiInfo() {
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("WiFi:");
-  lcd.print(WiFi.SSID());
-  lcd.setCursor(0, 1);
-  lcd.print("IP:");
-  lcd.print(WiFi.localIP().toString());
-  delay(4000);
-}
-
 void setup() {
   Serial.begin(115200);
 
@@ -107,134 +97,90 @@ void setup() {
     Serial.println("Error: RTC no detectado!");
   }
 
-  // --- Conexión WiFi (usa credenciales guardadas o SmartConfig) ---
+  // --- Cargar WiFi almacenado ---
   Preferences preferences;
   preferences.begin("wifi", true);
   String ssid = preferences.getString("ssid", "");
   String pass = preferences.getString("pass", "");
   preferences.end();
 
-  WiFi.mode(WIFI_STA);
   if (ssid != "") {
-    Serial.printf("Intentando conectar a %s\n", ssid.c_str());
+    WiFi.mode(WIFI_STA);
     WiFi.begin(ssid.c_str(), pass.c_str());
-  }
 
-  int intentos = 0;
-  while (WiFi.status() != WL_CONNECTED && intentos < 20) {
-    delay(500);
-    Serial.print(".");
-    intentos++;
-  }
-
-  // --- Si no conecta, iniciar SmartConfig ---
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nNo conectado. Iniciando SmartConfig...");
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("SmartConfig...");
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.beginSmartConfig();
-
-    unsigned long startTime = millis();
-    while (!WiFi.smartConfigDone() && millis() - startTime < 60000) { // Espera 1 min
+    int intentos = 0;
+    while (WiFi.status() != WL_CONNECTED && intentos < 20) {
       delay(500);
-      Serial.print(".");
+      intentos++;
     }
-
-    if (WiFi.smartConfigDone()) {
-      Serial.println("\nSmartConfig recibido!");
-      lcd.clear();
-      lcd.print("Red recibida!");
-      while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print("-");
+    if (WiFi.status() == WL_CONNECTED) {
+      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      struct tm timeinfo;
+      if (getLocalTime(&timeinfo)) {
+        rtc.adjust(DateTime(
+          timeinfo.tm_year + 1900,
+          timeinfo.tm_mon + 1,
+          timeinfo.tm_mday,
+          timeinfo.tm_hour,
+          timeinfo.tm_min,
+          timeinfo.tm_sec
+        ));
       }
-      Serial.println("\nWiFi conectado!");
-      lcd.clear();
-      lcd.print("WiFi conectado");
-
-      // Guardar credenciales
-      Preferences pref;
-      pref.begin("wifi", false);
-      pref.putString("ssid", WiFi.SSID());
-      pref.putString("pass", WiFi.psk());
-      pref.end();
-    } else {
-      Serial.println("\nSmartConfig falló o expiró.");
-      lcd.clear();
-      lcd.print("SmartCfg fallo");
     }
   }
-
-  // --- Mostrar SSID e IP si conectado ---
-  if (WiFi.status() == WL_CONNECTED) {
-    mostrarWiFiInfo();
-  }
-
-  // --- Sincronizar NTP si hay conexión ---
-  if (WiFi.status() == WL_CONNECTED) {
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo)) {
-      rtc.adjust(DateTime(
-        timeinfo.tm_year + 1900,
-        timeinfo.tm_mon + 1,
-        timeinfo.tm_mday,
-        timeinfo.tm_hour,
-        timeinfo.tm_min,
-        timeinfo.tm_sec
-      ));
-      Serial.println("Hora sincronizada con NTP");
-    }
-  }
-
-  lcd.clear();
-  lcd.print("Listo!");
-  delay(1000);
 }
 
 void loop() {
-  // --- Leer interruptor con anti-rebote ---
-  bool interruptorState = digitalRead(interruptorPin);
-  if (interruptorState == LOW && lastInterruptorState == HIGH && millis() - lastDebounce > 200) {
-    apagado = !apagado;
+  // --- Leer interruptor con antirrebote ---
+  bool lectura = digitalRead(interruptorPin);
+  if (lectura != lastInterruptorState) {
     lastDebounce = millis();
   }
-  lastInterruptorState = interruptorState;
+  if ((millis() - lastDebounce) > debounceDelay) {
+    if (lectura != apagado) {
+      apagado = lectura;
+    }
+  }
+  lastInterruptorState = lectura;
 
-  if (apagado) {
+  // --- Obtener hora actual ---
+  struct tm timeinfo;
+  obtenerHora(timeinfo);
+
+  // --- Pantalla rotativa ---
+  static unsigned long ultimoCambio = 0;
+  static bool mostrarHora = true;
+  if (millis() - ultimoCambio > 8000) {
+    mostrarHora = !mostrarHora;
+    ultimoCambio = millis();
+    lcd.clear();
+  }
+
+  // --- Línea superior: hora o fecha ---
+  if (mostrarHora) {
+    char horaStr[9];
+    strftime(horaStr, sizeof(horaStr), "%H:%M:%S", &timeinfo);
     lcd.setCursor(0, 0);
-    lcd.print("    APAGADO     ");
+    lcd.print("Hora: ");
+    lcd.print(horaStr);
+  } else {
+    char fechaStr[11];
+    strftime(fechaStr, sizeof(fechaStr), "%d/%m/%Y", &timeinfo);
+    lcd.setCursor(0, 0);
+    lcd.print("Fecha:");
+    lcd.print(fechaStr);
+  }
+
+  if (apagado == LOW) {
+    // --- SISTEMA APAGADO ---
     lcd.setCursor(0, 1);
-    lcd.print("                ");
+    lcd.print("    APAGADO     ");
     digitalWrite(buzzerPin, LOW);
     delay(500);
     return;
   }
 
-  // --- Sistema activo ---
-  struct tm timeinfo;
-  obtenerHora(timeinfo);
-
-  // --- Resincronización diaria automática ---
-  static unsigned long ultimaSync = 0;
-  if (WiFi.status() == WL_CONNECTED && millis() - ultimaSync > 86400000) { // cada 24 h
-    struct tm timeinfoNTP;
-    if (getLocalTime(&timeinfoNTP)) {
-      rtc.adjust(DateTime(
-        timeinfoNTP.tm_year + 1900,
-        timeinfoNTP.tm_mon + 1,
-        timeinfoNTP.tm_mday,
-        timeinfoNTP.tm_hour,
-        timeinfoNTP.tm_min,
-        timeinfoNTP.tm_sec
-      ));
-      ultimaSync = millis();
-      Serial.println("RTC resincronizado con NTP");
-    }
-  }
-
+  // --- SISTEMA ACTIVO ---
   // Buscar próximo timbre
   String proxHora = "----";
   char proxTipo = 'F';
@@ -249,7 +195,7 @@ void loop() {
     }
   }
 
-  // Activar timbre si corresponde
+  // --- Timbre (lunes a viernes) ---
   if (timeinfo.tm_wday >= 1 && timeinfo.tm_wday <= 5) {
     for (int i = 0; i < cantidadHorarios; i++) {
       if (timeinfo.tm_hour == horarios[i].hora &&
@@ -277,35 +223,13 @@ void loop() {
     ultimoMin = timeinfo.tm_min;
   }
 
-  // --- Pantalla rotativa ---
-  static unsigned long ultimoCambio = 0;
-  static bool mostrarHora = true;
-  if (millis() - ultimoCambio > 8000) {
-    mostrarHora = !mostrarHora;
-    ultimoCambio = millis();
-    lcd.clear();
-  }
-
-  if (mostrarHora) {
-    char horaStr[9];
-    strftime(horaStr, sizeof(horaStr), "%H:%M:%S", &timeinfo);
-    lcd.setCursor(0, 0);
-    lcd.print("Hora: ");
-    lcd.print(horaStr);
-  } else {
-    char fechaStr[11];
-    strftime(fechaStr, sizeof(fechaStr), "%d/%m/%Y", &timeinfo);
-    lcd.setCursor(0, 0);
-    lcd.print("Fecha:");
-    lcd.print(fechaStr);
-  }
-
+  // --- Línea inferior: próximo timbre ---
   lcd.setCursor(0, 1);
   lcd.print("Prox:");
   lcd.print(proxHora);
   lcd.print(" ");
   if (proxTipo == 'F') {
-    lcd.print("FIN");
+    lcd.print("FIN ");
   } else {
     lcd.print(textoTimbre(proxTipo));
   }
