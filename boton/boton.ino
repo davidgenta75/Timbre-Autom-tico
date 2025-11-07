@@ -20,7 +20,7 @@ const int buzzerPin = 2;
 bool alarmaActivada = false;
 
 // --- INTERRUPTOR PRINCIPAL ---
-const int interruptorPin = 10;   // ON/OFF
+const int interruptorPin = 9;   // ON/OFF
 bool apagado = false;
 bool lastInterruptorState = HIGH;
 unsigned long lastDebounce = 0;
