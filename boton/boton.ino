@@ -16,11 +16,11 @@ RTC_DS3231 rtc;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // --- BUZZER ---
-const int buzzerPin = 2;   
+const int buzzerPin = 4;   
 bool alarmaActivada = false;
 
 // --- INTERRUPTOR PRINCIPAL ---
-const int interruptorPin = 10;   // ON/OFF físico
+const int interruptorPin = 21;   // ON/OFF físico
 bool apagado = false;
 bool lastInterruptorState = HIGH;
 unsigned long lastDebounce = 0;
@@ -87,7 +87,7 @@ void setup() {
 
   pinMode(interruptorPin, INPUT_PULLUP);
 
-  Wire.begin(6, 7);   // SDA=6, SCL=7
+  Wire.begin(3, 4);   // SDA=3, SCL=4
   lcd.init();
   lcd.backlight();
   lcd.setCursor(0, 0);
